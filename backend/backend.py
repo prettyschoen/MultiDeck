@@ -15,7 +15,6 @@ HTTP_PORT = 8765
 
 STATE_DIR = Path.home() / ".config/decky-plugins/displayvpnmusic"
 STATE_DIR.mkdir(parents=True, exist_ok=True)
-STATE_FILE = STATE_DIR / "state.json"
 
 # ---------------- Logging ----------------
 
@@ -25,7 +24,7 @@ handler = logging.StreamHandler(sys.stdout)
 handler.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
 logger.addHandler(handler)
 
-# ---------------- Async loop (FIXED) ----------------
+# ---------------- Async loop ----------------
 
 async_loop = asyncio.new_event_loop()
 
@@ -38,32 +37,15 @@ threading.Thread(target=_start_async_loop, daemon=True).start()
 def run_async(coro):
     return asyncio.run_coroutine_threadsafe(coro, async_loop).result()
 
-# ---------------- Utilities ----------------
-
-def atomic_write(path: Path, data: dict):
-    tmp = path.with_suffix(".tmp")
-    with open(tmp, "w") as f:
-        json.dump(data, f)
-    os.replace(tmp, path)
-
-def load_state():
-    if STATE_FILE.exists():
-        with open(STATE_FILE) as f:
-            return json.load(f)
-    return {}
-
-def save_state(state):
-    atomic_write(STATE_FILE, state)
-
-# ---------------- Display control ----------------
+# ---------------- Display ----------------
 
 def turn_off_display(fade_ms=0):
     def _work():
         try:
             if fade_ms > 0:
-                time.sleep(fade_ms / 1000.0)
+                time.sleep(fade_ms / 1000)
 
-            # SteamOS-safe DPMS
+            # SteamOS-safe display off
             subprocess.run(
                 ["xset", "dpms", "force", "off"],
                 stdout=subprocess.DEVNULL,
@@ -76,7 +58,7 @@ def turn_off_display(fade_ms=0):
 
     threading.Thread(target=_work, daemon=True).start()
 
-# ---------------- VPN control ----------------
+# ---------------- VPN helpers ----------------
 
 def list_vpns():
     try:
@@ -94,6 +76,22 @@ def list_vpns():
     except Exception as e:
         logger.error(f"VPN list failed: {e}")
         return []
+
+def get_active_vpn():
+    try:
+        res = subprocess.run(
+            ["nmcli", "-t", "-f", "NAME,TYPE", "connection", "show", "--active"],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        for line in res.stdout.splitlines():
+            name, typ = line.split(":")
+            if typ == "vpn":
+                return name
+    except Exception as e:
+        logger.error(f"VPN status check failed: {e}")
+    return None
 
 def activate_vpn(name):
     def _work():
@@ -121,7 +119,7 @@ def deactivate_vpn(name):
 
     threading.Thread(target=_work, daemon=True).start()
 
-# ---------------- MPRIS music ----------------
+# ---------------- MPRIS (music metadata) ----------------
 
 async def get_mpris_metadata():
     try:
@@ -160,6 +158,9 @@ class APIHandler(BaseHTTPRequestHandler):
         elif self.path == "/vpn/list":
             self._json({"vpns": list_vpns()})
 
+        elif self.path == "/vpn/status":
+            self._json({"active": get_active_vpn()})
+
         elif self.path == "/vpn/on":
             activate_vpn(body.get("name"))
             self._json({"ok": True})
@@ -176,7 +177,7 @@ class APIHandler(BaseHTTPRequestHandler):
             self.send_error(404)
 
     def log_message(self, *_):
-        pass  # silence HTTP spam
+        pass  # silence default HTTP logging
 
 # ---------------- Main ----------------
 
