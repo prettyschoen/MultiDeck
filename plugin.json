@@ -1,5 +1,5 @@
 {
-  "name": "displayvpnmusic",
+  "name": "MultiDeck",
   "title": "Display + VPN + Music",
   "description": "Steam Deck plugin for Display Off with fade, VPN management, and MPRIS/Playerctl music controls. Fully Decky Loader 3.2.1 and SteamOS 3.7.17 compatible.",
   "version": "1.0.0",
@@ -8,7 +8,7 @@
   "api_version": "3.2.1",
   "main": {
     "frontend": "frontend/dist/index.js",
-    "backend": "backend/backend.py"
+    "backend": "backend/run.sh"
   },
   "tags": [
     "display",
