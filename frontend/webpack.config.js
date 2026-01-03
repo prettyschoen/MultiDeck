@@ -20,6 +20,6 @@ module.exports = {
     ],
   },
   externals: {
-    "@decky/ui": "@decky/ui",
+    "@decky/ui": "DeckyUI",
   },
 };
