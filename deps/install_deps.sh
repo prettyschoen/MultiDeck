@@ -2,12 +2,14 @@
 set -euo pipefail
 
 PLUGIN_DIR="$(cd "$(dirname "$0")" && pwd)"
+BACKEND_DIR="$PLUGIN_DIR/backend"
+VENV_DIR="$BACKEND_DIR/.venv"
 LOGFILE="$PLUGIN_DIR/install_deps.log"
 
 echo "=== DisplayVPNMusic dependency installer started: $(date) ===" | tee -a "$LOGFILE"
 echo
 
-# --- helper functions --------------------------------------------------------
+# --- SteamOS readonly handling -----------------------------------------------
 
 enable_rw() {
   echo "Disabling SteamOS read-only filesystem..." | tee -a "$LOGFILE"
@@ -24,7 +26,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# --- required system packages ------------------------------------------------
+# --- system dependencies -----------------------------------------------------
 
 declare -A SYSTEM_PACKAGES=(
   [python]="python"
@@ -47,25 +49,21 @@ for cmd in "${!SYSTEM_PACKAGES[@]}"; do
   fi
 done
 
-# --- install system packages -------------------------------------------------
-
 if [ "${#MISSING_PKGS[@]}" -ne 0 ]; then
-  echo
-  echo "Installing missing system packages:" | tee -a "$LOGFILE"
-  printf '  - %s\n' "${MISSING_PKGS[@]}" | tee -a "$LOGFILE"
-  echo
-
   enable_rw
-
   sudo pacman -Sy --needed --noconfirm "${MISSING_PKGS[@]}" >>"$LOGFILE" 2>&1
-else
-  echo "All required system packages are already installed." | tee -a "$LOGFILE"
 fi
 
-# --- python packages ----------------------------------------------------------
+# --- python virtual environment ----------------------------------------------
 
 echo
-echo "Checking Python packages (user install)..." | tee -a "$LOGFILE"
+echo "Setting up Python virtual environment..." | tee -a "$LOGFILE"
+
+if [ ! -d "$VENV_DIR" ]; then
+  python3 -m venv "$VENV_DIR" >>"$LOGFILE" 2>&1
+fi
+
+source "$VENV_DIR/bin/activate"
 
 PYTHON_PACKAGES=(
   dbus-next
@@ -74,18 +72,21 @@ PYTHON_PACKAGES=(
 )
 
 for pkg in "${PYTHON_PACKAGES[@]}"; do
-  if python3 - <<EOF 2>/dev/null
+  if python - <<EOF 2>/dev/null
 import $pkg
 EOF
   then
     echo "✔ Python package already installed: $pkg" | tee -a "$LOGFILE"
   else
-    echo "Installing Python package (user): $pkg" | tee -a "$LOGFILE"
-    python3 -m pip install --user "$pkg" >>"$LOGFILE" 2>&1
+    echo "Installing Python package in venv: $pkg" | tee -a "$LOGFILE"
+    pip install "$pkg" >>"$LOGFILE" 2>&1
   fi
 done
 
+deactivate
+
 echo
 echo "=== Dependency installation complete: $(date) ===" | tee -a "$LOGFILE"
+echo "Virtual environment: $VENV_DIR"
 echo "Log file: $LOGFILE"
 echo
