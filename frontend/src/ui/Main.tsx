@@ -1,123 +1,53 @@
-import { useEffect, useState } from "react";
 import {
+  Button,
   PanelSection,
   PanelSectionRow,
-  Button,
-  Dropdown
+  Dropdown,
 } from "@decky/ui";
+import { useEffect, useState } from "react";
 
-/* ---------------- API helper ---------------- */
-
-async function api(path: string, body?: any) {
-  const res = await fetch(`http://127.0.0.1:8765${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  return res.json();
-}
-
-/* ---------------- Main component ---------------- */
+type VPNOption = {
+  label: string;
+  data: string | null;
+};
 
 export default function Main() {
-  const [vpns, setVpns] = useState<string[]>([]);
-  const [activeVpn, setActiveVpn] = useState<string | null>(null);
-  const [backendOk, setBackendOk] = useState(true);
-
-  /* -------- Initial VPN list -------- */
-
-  async function refreshVpns() {
-    try {
-      const data = await api("/vpn/list");
-      setVpns(data.vpns ?? []);
-      setBackendOk(true);
-    } catch {
-      setBackendOk(false);
-    }
-  }
-
-  /* -------- Live VPN status polling -------- */
+  const [vpnOptions, setVpnOptions] = useState<VPNOption[]>([]);
+  const [selectedVPN, setSelectedVPN] = useState<VPNOption | null>(null);
 
   useEffect(() => {
-    refreshVpns();
-
-    const id = setInterval(async () => {
-      try {
-        const data = await api("/vpn/status");
-        setActiveVpn(data.active ?? null);
-        setBackendOk(true);
-      } catch {
-        setBackendOk(false);
-      }
-    }, 1500);
-
-    return () => clearInterval(id);
+    // Placeholder until backend wiring
+    const opts: VPNOption[] = [
+      { label: "None", data: null },
+      { label: "ExampleVPN", data: "example" },
+    ];
+    setVpnOptions(opts);
+    setSelectedVPN(opts[0]);
   }, []);
 
-  /* ---------------- UI ---------------- */
-
   return (
-    <>
-      {/* ---------- Display ---------- */}
-      <PanelSection title="Display" />
-
+    <PanelSection title="MultiDeck">
       <PanelSectionRow>
-        <Button onClick={() => api("/display/off", { fade_ms: 500 })}>
-          Turn Display Off
+        <Button onClick={() => console.log("Display off requested")}>
+          Display Off
         </Button>
       </PanelSectionRow>
 
-      {/* ---------- VPN ---------- */}
-      <PanelSection title="VPN" />
-
       <PanelSectionRow>
-        <div style={{ fontSize: "0.9em", opacity: 0.8 }}>
-          Select VPN
-        </div>
-      </PanelSectionRow>
-
-      <PanelSectionRow>
-        <Dropdown
-          rgOptions={vpns.map(v => ({
-            label: v,
-            data: v,
-          }))}
-          selectedOption={activeVpn}
-          onChange={async (opt) => {
-            await api("/vpn/on", { name: opt.data });
-          }}
-        />
-      </PanelSectionRow>
-
-      <PanelSectionRow>
-        <Button
-          onClick={() => {
-            if (activeVpn) {
-              api("/vpn/off", { name: activeVpn });
-            }
-          }}
-          disabled={!activeVpn}
-        >
-          Disconnect VPN
-        </Button>
-      </PanelSectionRow>
-
-      {/* ---------- Status ---------- */}
-      <PanelSectionRow>
-        <div style={{ opacity: 0.8 }}>
-          {activeVpn
-            ? `🔒 VPN Connected: ${activeVpn}`
-            : "🔓 VPN Disconnected"}
-        </div>
-      </PanelSectionRow>
-
-      {!backendOk && (
-        <PanelSectionRow>
-          <div style={{ color: "red" }}>
-            Backend not responding
+        <div style={{ width: "100%" }}>
+          <div style={{ marginBottom: "4px", fontSize: "12px", opacity: 0.7 }}>
+            VPN Selection
           </div>
-        </PanelSectionRow>
-      )}
-    </>
+          <Dropdown
+            rgOptions={vpnOptions}
+            selectedOption={selectedVPN}
+            onChange={(opt: VPNOption | null) => {
+              setSelectedVPN(opt);
+              console.log("VPN selected:", opt);
+            }}
+          />
+        </div>
+      </PanelSectionRow>
+    </PanelSection>
   );
 }
