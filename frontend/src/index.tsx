@@ -1,8 +1,7 @@
 import { createRoot } from "react-dom/client";
-import { Main } from "./ui/Main";
+import Main from "./ui/Main"; // <— IMPORTANT: default import
 
 const rootElem = document.getElementById("root");
 if (rootElem) {
-  const root = createRoot(rootElem);
-  root.render(<Main />);
+  createRoot(rootElem).render(<Main />);
 }
