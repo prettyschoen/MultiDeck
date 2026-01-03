@@ -47,4 +47,45 @@ for cmd in "${!SYSTEM_PACKAGES[@]}"; do
   fi
 done
 
-#
+# --- install system packages -------------------------------------------------
+
+if [ "${#MISSING_PKGS[@]}" -ne 0 ]; then
+  echo
+  echo "Installing missing system packages:" | tee -a "$LOGFILE"
+  printf '  - %s\n' "${MISSING_PKGS[@]}" | tee -a "$LOGFILE"
+  echo
+
+  enable_rw
+
+  sudo pacman -Sy --needed --noconfirm "${MISSING_PKGS[@]}" >>"$LOGFILE" 2>&1
+else
+  echo "All required system packages are already installed." | tee -a "$LOGFILE"
+fi
+
+# --- python packages ----------------------------------------------------------
+
+echo
+echo "Checking Python packages (user install)..." | tee -a "$LOGFILE"
+
+PYTHON_PACKAGES=(
+  dbus-next
+  psutil
+  evdev
+)
+
+for pkg in "${PYTHON_PACKAGES[@]}"; do
+  if python3 - <<EOF 2>/dev/null
+import $pkg
+EOF
+  then
+    echo "✔ Python package already installed: $pkg" | tee -a "$LOGFILE"
+  else
+    echo "Installing Python package (user): $pkg" | tee -a "$LOGFILE"
+    python3 -m pip install --user "$pkg" >>"$LOGFILE" 2>&1
+  fi
+done
+
+echo
+echo "=== Dependency installation complete: $(date) ===" | tee -a "$LOGFILE"
+echo "Log file: $LOGFILE"
+echo
