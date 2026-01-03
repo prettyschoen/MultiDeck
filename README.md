@@ -1,4 +1,4 @@
-# DisplayVPNMusic Decky Loader Plugin
+# MultiDeck Decky Loader Plugin
 
 ## Overview
 Decky Loader plugin for Steam Deck:
