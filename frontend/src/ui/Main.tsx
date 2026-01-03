@@ -3,15 +3,14 @@ import {
   PanelSection,
   PanelSectionRow,
   Button,
-  Dropdown,
-  Toggle
+  Dropdown
 } from "@decky/ui";
 
 /* ---------------- API helper ---------------- */
 
 async function api(path: string, body?: any) {
   const res = await fetch(`http://127.0.0.1:8765${path}`, {
-    method: body ? "POST" : "POST",
+    method: "POST",
     headers: { "Content-Type": "application/json" },
     body: body ? JSON.stringify(body) : undefined,
   });
@@ -22,10 +21,10 @@ async function api(path: string, body?: any) {
 
 export default function Main() {
   const [vpns, setVpns] = useState<string[]>([]);
-  const [selectedVpn, setSelectedVpn] = useState<string | null>(null);
+  const [activeVpn, setActiveVpn] = useState<string | null>(null);
   const [backendOk, setBackendOk] = useState(true);
 
-  /* -------- Load VPN list -------- */
+  /* -------- Initial VPN list -------- */
 
   async function refreshVpns() {
     try {
@@ -37,8 +36,22 @@ export default function Main() {
     }
   }
 
+  /* -------- Live VPN status polling -------- */
+
   useEffect(() => {
     refreshVpns();
+
+    const id = setInterval(async () => {
+      try {
+        const data = await api("/vpn/status");
+        setActiveVpn(data.active ?? null);
+        setBackendOk(true);
+      } catch {
+        setBackendOk(false);
+      }
+    }, 1500);
+
+    return () => clearInterval(id);
   }, []);
 
   /* ---------------- UI ---------------- */
@@ -49,9 +62,7 @@ export default function Main() {
       <PanelSection title="Display" />
 
       <PanelSectionRow>
-        <Button
-          onClick={() => api("/display/off", { fade_ms: 500 })}
-        >
+        <Button onClick={() => api("/display/off", { fade_ms: 500 })}>
           Turn Display Off
         </Button>
       </PanelSectionRow>
@@ -59,7 +70,6 @@ export default function Main() {
       {/* ---------- VPN ---------- */}
       <PanelSection title="VPN" />
 
-      {/* Label as SEPARATE TEXT (correct way) */}
       <PanelSectionRow>
         <div style={{ fontSize: "0.9em", opacity: 0.8 }}>
           Select VPN
@@ -72,9 +82,8 @@ export default function Main() {
             label: v,
             data: v,
           }))}
-          selectedOption={selectedVpn}
+          selectedOption={activeVpn}
           onChange={async (opt) => {
-            setSelectedVpn(opt.data);
             await api("/vpn/on", { name: opt.data });
           }}
         />
@@ -83,28 +92,25 @@ export default function Main() {
       <PanelSectionRow>
         <Button
           onClick={() => {
-            if (selectedVpn) {
-              api("/vpn/off", { name: selectedVpn });
+            if (activeVpn) {
+              api("/vpn/off", { name: activeVpn });
             }
           }}
-          disabled={!selectedVpn}
+          disabled={!activeVpn}
         >
           Disconnect VPN
         </Button>
       </PanelSectionRow>
 
-      {/* ---------- Music ---------- */}
-      <PanelSection title="Music" />
-
+      {/* ---------- Status ---------- */}
       <PanelSectionRow>
-        <Button
-          onClick={() => api("/music/metadata")}
-        >
-          Refresh Track Info
-        </Button>
+        <div style={{ opacity: 0.8 }}>
+          {activeVpn
+            ? `🔒 VPN Connected: ${activeVpn}`
+            : "🔓 VPN Disconnected"}
+        </div>
       </PanelSectionRow>
 
-      {/* ---------- Backend status ---------- */}
       {!backendOk && (
         <PanelSectionRow>
           <div style={{ color: "red" }}>
