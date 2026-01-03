@@ -1,0 +1,31 @@
+# Node.js / Frontend
+node_modules/
+frontend/dist/
+dist/
+*.log
+
+# Python / Backend
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+env/
+venv/
+backend/.env
+
+# Decky persistent state & runtime
+state/
+logs/
+*.pid
+
+# IDE/editor files
+.vscode/
+.idea/
+*.swp
+
+# OS/File system artifacts
+.DS_Store
+Thumbs.db
+
+# Other environment/config files
+.env
