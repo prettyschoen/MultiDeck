@@ -1,190 +1,210 @@
 #!/usr/bin/env python3
-import asyncio
+
 import json
 import logging
 import os
+import signal
 import sys
 import threading
-import time
-import subprocess
-from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from typing import Optional
+
+import dbus
+
+# ----------------------------
+# Constants
+# ----------------------------
 
 PLUGIN_NAME = "MultiDeck"
-HTTP_PORT = 8765
 
-STATE_DIR = Path.home() / ".config/decky-plugins/displayvpnmusic"
-STATE_DIR.mkdir(parents=True, exist_ok=True)
+TARGET_STEAMOS_VERSION = "3.7.17"
+TARGET_DECKY_VERSION = "3.2.1"
 
-# ---------------- Logging ----------------
+BASE_DIR = Path(__file__).resolve().parent
+STATE_FILE = BASE_DIR / "state.json"
 
-logger = logging.getLogger(PLUGIN_NAME)
-logger.setLevel(logging.INFO)
-handler = logging.StreamHandler(sys.stdout)
-handler.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
-logger.addHandler(handler)
+# ----------------------------
+# Logging setup
+# ----------------------------
 
-# ---------------- Async loop ----------------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] MultiDeck: %(message)s",
+)
 
-async_loop = asyncio.new_event_loop()
+log = logging.getLogger(__name__)
 
-def _start_async_loop():
-    asyncio.set_event_loop(async_loop)
-    async_loop.run_forever()
+# ----------------------------
+# State Manager (atomic)
+# ----------------------------
 
-threading.Thread(target=_start_async_loop, daemon=True).start()
+class StateManager:
+    def __init__(self, path: Path):
+        self.path = path
+        self.lock = threading.Lock()
+        self.state = self._load()
 
-def run_async(coro):
-    return asyncio.run_coroutine_threadsafe(coro, async_loop).result()
+    def _default_state(self):
+        return {
+            "display": {
+                "brightness": None,
+                "inhibited": False,
+            },
+            "audio": {
+                "speaker_muted": False,
+                "mic_muted": False,
+            },
+            "vpn": {
+                "previous": None,
+                "current": None,
+            },
+        }
 
-# ---------------- Display ----------------
+    def _load(self):
+        if not self.path.exists():
+            return self._default_state()
 
-def turn_off_display(fade_ms=0):
-    def _work():
         try:
-            if fade_ms > 0:
-                time.sleep(fade_ms / 1000)
-
-            # SteamOS-safe display off
-            subprocess.run(
-                ["xset", "dpms", "force", "off"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=False
-            )
-            logger.info("Display turned off")
+            with self.path.open("r", encoding="utf-8") as f:
+                return json.load(f)
         except Exception as e:
-            logger.error(f"Display off failed: {e}")
+            log.error("Failed to load state file, resetting: %s", e)
+            return self._default_state()
 
-    threading.Thread(target=_work, daemon=True).start()
+    def save(self):
+        with self.lock:
+            tmp = self.path.with_suffix(".tmp")
+            with tmp.open("w", encoding="utf-8") as f:
+                json.dump(self.state, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            tmp.replace(self.path)
 
-# ---------------- VPN helpers ----------------
+    def update(self, updater):
+        with self.lock:
+            updater(self.state)
+            self.save()
 
-def list_vpns():
+state = StateManager(STATE_FILE)
+
+# ----------------------------
+# Version detection
+# ----------------------------
+
+def detect_steamos_version():
+    info = {}
     try:
-        res = subprocess.run(
-            ["nmcli", "-t", "-f", "NAME,TYPE", "connection", "show"],
-            capture_output=True,
-            text=True,
-            check=True
-        )
-        return [
-            name for name, typ in
-            (line.split(":") for line in res.stdout.splitlines())
-            if typ == "vpn"
-        ]
+        with open("/etc/os-release", "r") as f:
+            for line in f:
+                if "=" in line:
+                    k, v = line.strip().split("=", 1)
+                    info[k] = v.strip('"')
     except Exception as e:
-        logger.error(f"VPN list failed: {e}")
-        return []
+        log.error("Failed to read /etc/os-release: %s", e)
 
-def get_active_vpn():
-    try:
-        res = subprocess.run(
-            ["nmcli", "-t", "-f", "NAME,TYPE", "connection", "show", "--active"],
-            capture_output=True,
-            text=True,
-            check=True
+    return info
+
+def detect_decky_version():
+    # Decky exposes version via env in recent releases
+    return os.environ.get("DECKY_VERSION") or "unknown"
+
+def log_versions():
+    os_info = detect_steamos_version()
+    steamos_version = os_info.get("VERSION_ID", "unknown")
+    pretty = os_info.get("PRETTY_NAME", "unknown")
+    decky_version = detect_decky_version()
+
+    log.info("SteamOS detected: %s (%s)", steamos_version, pretty)
+    log.info("Decky Loader detected: %s", decky_version)
+
+    if steamos_version != TARGET_STEAMOS_VERSION:
+        log.warning(
+            "SteamOS version mismatch (expected %s, got %s)",
+            TARGET_STEAMOS_VERSION,
+            steamos_version,
         )
-        for line in res.stdout.splitlines():
-            name, typ = line.split(":")
-            if typ == "vpn":
-                return name
-    except Exception as e:
-        logger.error(f"VPN status check failed: {e}")
-    return None
 
-def activate_vpn(name):
-    def _work():
+    if decky_version != TARGET_DECKY_VERSION:
+        log.warning(
+            "Decky Loader version mismatch (expected %s, got %s)",
+            TARGET_DECKY_VERSION,
+            decky_version,
+        )
+
+# ----------------------------
+# login1 Sleep Inhibition
+# ----------------------------
+
+class SleepInhibitor:
+    def __init__(self):
+        self.bus = None
+        self.fd = None
+
+    def acquire(self, reason: str):
+        if self.fd is not None:
+            log.debug("Sleep already inhibited")
+            return
+
         try:
-            subprocess.run(
-                ["nmcli", "connection", "up", name],
-                check=True
+            self.bus = dbus.SystemBus()
+            proxy = self.bus.get_object(
+                "org.freedesktop.login1",
+                "/org/freedesktop/login1",
             )
-            logger.info(f"VPN activated: {name}")
+            iface = dbus.Interface(proxy, "org.freedesktop.login1.Manager")
+
+            self.fd = iface.Inhibit(
+                "sleep",
+                PLUGIN_NAME,
+                reason,
+                "block",
+                dbus_interface="org.freedesktop.login1.Manager",
+            )
+
+            state.update(lambda s: s["display"].update({"inhibited": True}))
+            log.info("Sleep inhibited (%s)", reason)
+
         except Exception as e:
-            logger.error(f"VPN activation failed: {e}")
+            log.error("Failed to acquire sleep inhibition: %s", e)
 
-    threading.Thread(target=_work, daemon=True).start()
+    def release(self):
+        if self.fd is None:
+            return
 
-def deactivate_vpn(name):
-    def _work():
         try:
-            subprocess.run(
-                ["nmcli", "connection", "down", name],
-                check=True
-            )
-            logger.info(f"VPN deactivated: {name}")
+            self.fd.close()
+            log.info("Sleep inhibition released")
         except Exception as e:
-            logger.error(f"VPN deactivation failed: {e}")
+            log.error("Failed to release inhibition: %s", e)
+        finally:
+            self.fd = None
+            state.update(lambda s: s["display"].update({"inhibited": False}))
 
-    threading.Thread(target=_work, daemon=True).start()
+sleep_inhibitor = SleepInhibitor()
 
-# ---------------- MPRIS (music metadata) ----------------
+# ----------------------------
+# Cleanup handling
+# ----------------------------
 
-async def get_mpris_metadata():
-    try:
-        import dbus
-        bus = dbus.SessionBus()
-        for service in bus.list_names():
-            if service.startswith("org.mpris.MediaPlayer2"):
-                obj = bus.get_object(service, "/org/mpris/MediaPlayer2")
-                iface = dbus.Interface(obj, "org.freedesktop.DBus.Properties")
-                meta = iface.Get("org.mpris.MediaPlayer2.Player", "Metadata")
-                return {
-                    "title": str(meta.get("xesam:title", "")),
-                    "artist": ", ".join(meta.get("xesam:artist", []))
-                }
-    except Exception:
-        pass
-    return {}
+def shutdown_handler(*_):
+    log.info("Backend shutting down, cleaning up")
+    sleep_inhibitor.release()
+    sys.exit(0)
 
-# ---------------- HTTP API ----------------
+signal.signal(signal.SIGTERM, shutdown_handler)
+signal.signal(signal.SIGINT, shutdown_handler)
 
-class APIHandler(BaseHTTPRequestHandler):
-    def _json(self, data):
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.end_headers()
-        self.wfile.write(json.dumps(data).encode())
-
-    def do_POST(self):
-        length = int(self.headers.get("Content-Length", 0))
-        body = json.loads(self.rfile.read(length)) if length else {}
-
-        if self.path == "/display/off":
-            turn_off_display(body.get("fade_ms", 0))
-            self._json({"ok": True})
-
-        elif self.path == "/vpn/list":
-            self._json({"vpns": list_vpns()})
-
-        elif self.path == "/vpn/status":
-            self._json({"active": get_active_vpn()})
-
-        elif self.path == "/vpn/on":
-            activate_vpn(body.get("name"))
-            self._json({"ok": True})
-
-        elif self.path == "/vpn/off":
-            deactivate_vpn(body.get("name"))
-            self._json({"ok": True})
-
-        elif self.path == "/music/metadata":
-            meta = run_async(get_mpris_metadata())
-            self._json(meta)
-
-        else:
-            self.send_error(404)
-
-    def log_message(self, *_):
-        pass  # silence default HTTP logging
-
-# ---------------- Main ----------------
+# ----------------------------
+# Backend entry
+# ----------------------------
 
 def main():
-    logger.info("Starting MultiDeck backend")
-    server = HTTPServer(("127.0.0.1", HTTP_PORT), APIHandler)
-    server.serve_forever()
+    log.info("Starting MultiDeck backend")
+    log_versions()
+    log.info("Initial state loaded: %s", state.state)
+
+    # Backend event loop placeholder
+    signal.pause()
 
 if __name__ == "__main__":
     main()
