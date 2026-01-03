@@ -10,7 +10,7 @@
     "react-dom": "^18.2.0"
   },
   "devDependencies": {
-    "@decky/ui": "git+https://github.com/SteamDeckHomebrew/decky-ui-lib.git",
+    "@decky/ui": "https://github.com/SteamDeckHomebrew/decky-ui-lib.git",
     "@types/react": "^18.2.15",
     "@types/react-dom": "^18.2.7",
     "ts-loader": "^9.5.1",
